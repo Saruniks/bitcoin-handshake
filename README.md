@@ -8,7 +8,7 @@ cargo run
 
 Expected output:
 
-```sh
+```
 Version message sent
 Waiting for response...
 Version message received
