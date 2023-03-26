@@ -10,5 +10,5 @@ Version message received
 Verack message sent
 Waiting for response...
 Verack message received
-Handhake succeded
+Handshake succeded
 ```

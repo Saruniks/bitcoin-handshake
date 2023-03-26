@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     read_verack_message(&mut stream).await?;
     println!("Verack message received");
 
-    println!("Handhake succeded");
+    println!("Handshake succeded");
     Ok(())
 }
 
