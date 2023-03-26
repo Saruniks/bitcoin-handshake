@@ -1,95 +1,158 @@
-use std::io::{BufReader, Write};
-use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpStream};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::net::SocketAddr;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 
-use bitcoin::consensus::{encode, Decodable};
-use bitcoin::network::{address, constants, message, message_network};
-use bitcoin::secp256k1;
-use bitcoin::secp256k1::rand::Rng;
+static VERSION_MESSAGE: &[u8] = &[
+    // header
+    249, 190, 180, 217, // magic
+    118, 101, 114, 115, 105, 111, 110, 0, 0, 0, 0, 0, // "version" command
+    86, 0, 0, 0, // payload len
+    94, 38, 138, 233, // checksum
+    // payload
+    113, 17, 1, 0, // protocol version
+    0, 0, 0, 0, 0, 0, 0, 0, // services
+    0, 0, 0, 0, 0, 0, 0, 0, // time
+    // 36, 99, 31, 100, 0, 0, 0, 0, // time
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 134, 195, 185, 52, 32,
+    141, // recipient address info
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 0, 0, 0, 0, 0,
+    0, // sender address info
+    0, 0, 0, 0, 0, 0, 0, 0, // Node ID,
+    // 131, 67, 161, 229, 100, 242, 249, 181, // Node ID,
+    0, // "" sub-version string, 0 bytes long
+    0, // relay
+    0, 0, 0, 0, // last block sending node
+];
+
+static VERACK_MESSAGE: &[u8] = &[
+    // header
+    249, 190, 180, 217, // magic
+    18, 101, 114, 97, 99, 107, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // payload len
+    93, 246, 224, 226, // checksum
+];
 
 #[tokio::main]
-async fn main() {
-    let address: SocketAddr = "134.195.185.52:8333".parse().unwrap(); // todo: use "seed.bitcoin.sipa.be:8333"
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let address: SocketAddr = "134.195.185.52:8333".parse().unwrap();
 
-    let version_message = build_version_message(address);
+    let mut stream = TcpStream::connect(address).await?;
 
-    let first_message = message::RawNetworkMessage {
-        magic: constants::Network::Bitcoin.magic(),
-        payload: version_message,
-    };
+    let _ = stream.write_all(VERSION_MESSAGE).await;
+    read_version_message(&mut stream).await?;
 
-    if let Ok(mut stream) = TcpStream::connect(address) {
-        // Send the message
-        let _ = stream.write_all(encode::serialize(&first_message).as_slice());
-        println!("Sent version message");
-
-        // Setup StreamReader
-        let read_stream = stream.try_clone().unwrap();
-        let mut stream_reader = BufReader::new(read_stream);
-        loop {
-            // Loop an retrieve new messages
-            let reply = message::RawNetworkMessage::consensus_decode(&mut stream_reader).unwrap();
-            match reply.payload {
-                message::NetworkMessage::Version(_) => {
-                    println!("Received version message: {:?}", reply.payload);
-
-                    let second_message = message::RawNetworkMessage {
-                        magic: constants::Network::Bitcoin.magic(),
-                        payload: message::NetworkMessage::Verack,
-                    };
-
-                    let _ = stream.write_all(encode::serialize(&second_message).as_slice());
-                    println!("Sent verack message");
-                }
-                message::NetworkMessage::Verack => {
-                    println!("Received verack message: {:?}", reply.payload);
-                    break;
-                }
-                _ => {
-                    println!("Received unknown message: {:?}", reply.payload);
-                    break;
-                }
-            }
-        }
-        let _ = stream.shutdown(Shutdown::Both);
-    } else {
-        eprintln!("Failed to open connection");
-    }
+    let _ = stream.write_all(VERACK_MESSAGE).await;
+    read_verack_message(&mut stream).await?;
+    Ok(())
 }
 
-fn build_version_message(address: SocketAddr) -> message::NetworkMessage {
-    // Building version message, see https://en.bitcoin.it/wiki/Protocol_documentation#version
-    let my_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
+async fn read_version_message(stream: &mut TcpStream) -> Result<(), Box<dyn std::error::Error>> {
+    let mut magic = vec![0; 4];
+    stream.read_exact(&mut magic).await?;
 
-    // "bitfield of features to be enabled for this connection"
-    let services = constants::ServiceFlags::NONE;
+    println!("{:?}", magic);
 
-    // "standard UNIX timestamp in seconds"
-    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).expect("Time error").as_secs();
+    let mut cmd = vec![0; 12];
+    stream.read_exact(&mut cmd).await?;
 
-    // "The network address of the node receiving this message"
-    let addr_recv = address::Address::new(&address, constants::ServiceFlags::NONE);
+    println!("{:?}", cmd);
 
-    // "The network address of the node emitting this message"
-    let addr_from = address::Address::new(&my_address, constants::ServiceFlags::NONE);
+    let mut len = vec![0; 4];
+    stream.read_exact(&mut len).await?;
 
-    // "Node random nonce, randomly generated every time a version packet is sent. This nonce is used to detect connections to self."
-    let nonce: u64 = secp256k1::rand::thread_rng().gen();
+    println!("{:?}", len);
 
-    // "User Agent (0x00 if string is 0 bytes long)"
-    let user_agent = String::from("rust-example");
+    let mut checksum = vec![0; 4];
+    stream.read_exact(&mut checksum).await?;
 
-    // "The last block received by the emitting node"
-    let start_height: i32 = 0;
+    println!("{:?}", checksum);
 
-    // Construct the message
-    message::NetworkMessage::Version(message_network::VersionMessage::new(
-        services,
-        timestamp as i64,
-        addr_recv,
-        addr_from,
-        nonce,
-        user_agent,
-        start_height,
-    ))
+    let mut payload = vec![0; 102];
+    stream.read_exact(&mut payload).await?;
+
+    println!("{:?}", payload);
+
+    println!("Finished reading version");
+    Ok(())
 }
+
+async fn read_verack_message(stream: &mut TcpStream) -> Result<(), Box<dyn std::error::Error>> {
+    let mut verack = vec![0; 24];
+    stream.read_exact(&mut verack).await.unwrap();
+
+    println!("{:?}", verack);
+
+    println!("Finished reading verack");
+    Ok(())
+}
+
+// fn build_version_message_vec(address: SocketAddr) -> Vec<u8> {
+//     vec![
+//         // header
+//         249, 190, 180, 217, // magic
+//         118, 101, 114, 115, 105, 111, 110, 0, 0, 0, 0, 0, // "version" command
+//         86, 0, 0, 0, // payload len
+//         94, 38, 138, 233, // checksum
+
+//         // payload
+//         113, 17, 1, 0, // protocol version
+//         0, 0, 0, 0, 0, 0, 0, 0, // services
+//         0, 0, 0, 0, 0, 0, 0, 0, // time
+//         // 36, 99, 31, 100, 0, 0, 0, 0, // time
+//         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 134, 195, 185, 52, 32, 141, // recipient address info
+//         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 0, 0, 0, 0, 0, 0, // sender address info
+//         0, 0, 0, 0, 0, 0, 0, 0, // Node ID,
+//         // 131, 67, 161, 229, 100, 242, 249, 181, // Node ID,
+//         0, // "" sub-version string, 0 bytes long
+//         0, // relay
+//         0, 0, 0, 0, // last block sending node
+//     ]
+// }
+
+// fn build_verack_message_vec() -> Vec<u8> {
+//     vec![
+//         // header
+//         249, 190, 180, 217, // magic
+//         18, 101, 114, 97, 99, 107, 0, 0, 0, 0, 0, 0,
+//         0, 0, 0, 0, // payload len
+//         93, 246, 224, 226, // checksum
+//     ]
+// }
+
+// fn build_version_message(address: SocketAddr) -> message::NetworkMessage {
+//     // Building version message, see https://en.bitcoin.it/wiki/Protocol_documentation#version
+//     let my_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
+
+//     // "bitfield of features to be enabled for this connection"
+//     let services = constants::ServiceFlags::NONE;
+
+//     // "standard UNIX timestamp in seconds"
+//     // let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).expect("Time error").as_secs();
+//     let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).expect("Time error").as_secs();
+
+//     // "The network address of the node receiving this message"
+//     let addr_recv = address::Address::new(&address, constants::ServiceFlags::NONE);
+
+//     // "The network address of the node emitting this message"
+//     let addr_from = address::Address::new(&my_address, constants::ServiceFlags::NONE);
+
+//     // "Node random nonce, randomly generated every time a version packet is sent. This nonce is used to detect connections to self."
+//     // let nonce: u64 = secp256k1::rand::thread_rng().gen();
+//     let nonce: u64 = secp256k1::rand::thread_rng().gen();
+
+//     // "User Agent (0x00 if string is 0 bytes long)"
+//     let user_agent = String::from("rust-example");
+
+//     // "The last block received by the emitting node"
+//     let start_height: i32 = 0;
+
+//     // Construct the message
+//     message::NetworkMessage::Version(message_network::VersionMessage::new(
+//         services,
+//         timestamp as i64,
+//         addr_recv,
+//         addr_from,
+//         nonce,
+//         user_agent,
+//         start_height,
+//     ))
+// }
