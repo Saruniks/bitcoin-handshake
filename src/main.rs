@@ -57,11 +57,11 @@ fn build_version_message(address: SocketAddr) -> Vec<u8> {
     ];
 
     // Add payload len
-    header.extend_from_slice(&mut (payload.len() as u32).to_le_bytes());
+    header.extend_from_slice(&(payload.len() as u32).to_le_bytes());
 
     // Add checksum
-    let mut checksum = get_first_4_bytes_of_double_sha256(&payload);
-    header.extend_from_slice(&mut checksum);
+    let checksum = get_first_4_bytes_of_double_sha256(&payload);
+    header.extend_from_slice(&checksum);
     header.extend(&payload);
     header
 }
@@ -74,7 +74,7 @@ fn socket_addr_to_vec(socket_addr: SocketAddr) -> Vec<u8> {
 
     let port = socket_addr.port();
     let mut port_bytes = [0u8; 2];
-    port_bytes.copy_from_slice(&(port as u16).to_be_bytes());
+    port_bytes.copy_from_slice(&port.to_be_bytes());
 
     [ip, port_bytes.to_vec()].concat()
 }
@@ -94,7 +94,7 @@ async fn read_version_message(stream: &mut TcpStream) -> Result<(), Box<dyn std:
 
     let checksum = get_first_4_bytes_of_double_sha256(&payload);
 
-    if checksum == &header[20..24] {
+    if checksum == header[20..24] {
         Ok(())
     } else {
         Err("Invalid version message checksum".into())
@@ -109,7 +109,7 @@ async fn read_verack_message(stream: &mut TcpStream) -> Result<(), Box<dyn std::
         return Err("Unexpected command".into());
     }
 
-    if [93, 246, 224, 226] != &verack[20..24] {
+    if [93, 246, 224, 226] != verack[20..24] {
         return Err("Invalid verack message checksum".into());
     }
 
